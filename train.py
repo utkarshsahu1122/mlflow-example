@@ -5,6 +5,7 @@
 import os
 import warnings
 import sys
+import argparse
 
 import pandas as pd
 import numpy as np
@@ -14,7 +15,7 @@ from sklearn.linear_model import ElasticNet
 
 import mlflow
 import mlflow.sklearn
-
+from mlflow.models.signature import infer_signature
 
 def eval_metrics(actual, pred):
     rmse = np.sqrt(mean_squared_error(actual, pred))
@@ -28,9 +29,19 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     np.random.seed(40)
 
+    # Robust Argument Parsing
+    parser = argparse.ArgumentParser(description="ElasticNet Wine Quality Model")
+    parser.add_argument("--alpha", type=float, default=0.5, help="Alpha learning rate")
+    parser.add_argument("--l1-ratio", type=float, default=0.5, help="L1 regularization ratio")
+    args = parser.parse_args()
+    
     # Read the wine-quality csv file (make sure you're running this from the root of MLflow!)
     wine_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wine-quality.csv")
-    data = pd.read_csv(wine_path)
+    try:
+        data = pd.read_csv(wine_path)
+    except Exception as e:
+        print(f"Unable to load data. Error: {e}")
+        sys.exit(1)
 
     # Split the data into training and test sets. (0.75, 0.25) split.
     train, test = train_test_split(data)
@@ -41,26 +52,28 @@ if __name__ == "__main__":
     train_y = train[["quality"]]
     test_y = test[["quality"]]
 
-    alpha = float(sys.argv[1]) if len(sys.argv) > 1 else 0.5
-    l1_ratio = float(sys.argv[2]) if len(sys.argv) > 2 else 0.5
-
+    # Enable Autologging
+    mlflow.sklearn.autolog()
+    
     with mlflow.start_run():
-        lr = ElasticNet(alpha=alpha, l1_ratio=l1_ratio, random_state=42)
+        lr = ElasticNet(alpha=args.alpha, l1_ratio=args.l1_ratio, random_state=42)
         lr.fit(train_x, train_y)
 
         predicted_qualities = lr.predict(test_x)
-
         (rmse, mae, r2) = eval_metrics(test_y, predicted_qualities)
 
-        print("Elasticnet model (alpha=%f, l1_ratio=%f):" % (alpha, l1_ratio))
-        print("  RMSE: %s" % rmse)
-        print("  MAE: %s" % mae)
-        print("  R2: %s" % r2)
+        print(f"Elasticnet model (alpha={args.alpha:f}, l1_ratio={args.l1_ratio:f}):")
+        print(f"  RMSE: {rmse}")
+        print(f"  MAE: {mae}")
+        print(f"  R2: {r2}")
 
-        mlflow.log_param("alpha", alpha)
-        mlflow.log_param("l1_ratio", l1_ratio)
-        mlflow.log_metric("rmse", rmse)
-        mlflow.log_metric("r2", r2)
-        mlflow.log_metric("mae", mae)
+        # Log Model with Signature and Input Example
+        signature = infer_signature(train_x, predicted_qualities)
+        input_example = train_x.iloc[:5]
 
-        mlflow.sklearn.log_model(lr, "model")
+        mlflow.sklearn.log_model(
+            lr,
+            "model",
+            signature=signature,
+            input_example=input_example
+        )
